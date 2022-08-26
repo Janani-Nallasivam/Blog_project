@@ -1,0 +1,444 @@
+using Oracle.ManagedDataAccess.Client;
+using System;
+using System.Collections.Generic;
+using Snowflake.Data.Client;
+using System.Text.RegularExpressions;
+using System.Data.Common;
+using System.IO;
+using Newtonsoft.Json;
+using System.Linq;
+using JsonSerializer = System.Text.Json.JsonSerializer;
+using System.Collections.Concurrent;
+
+namespace Qlik_Views
+{
+    class Program
+    {
+        static ConcurrentBag<Tuple<string, string, string, string, string, string>> ref_oracle_views = new ConcurrentBag<Tuple<string, string, string, string, string, string>>();
+        static ConcurrentBag<Tuple<string, string, string, string, string>> All_Dependency_list = new ConcurrentBag<Tuple<string, string, string, string, string>>();
+        static ConcurrentBag<Tuple<string, string, string, string, string, string, string>> SynonymList = new ConcurrentBag<Tuple<string, string, string, string, string, string, string>>();
+        //static IEnumerable<string> myEnum; 
+        static ConcurrentBag<string> Unique_List = new ConcurrentBag<string>();
+
+        //static ConcurrentBag<T> ToConcurrentBag<T>(this IEnumerable<T> Unique_List) => new ConcurrentBag<T>(Unique_List);
+        static ConcurrentBag<string> Actual_list = new ConcurrentBag<string>();
+        static ConcurrentBag<Tuple<string, string>> Error_list = new ConcurrentBag<Tuple<string, string>>();
+        static ConcurrentBag<Tuple<string, int,string>> DependencyScore = new ConcurrentBag<Tuple<string, int,string>>();
+        static ConcurrentBag<Tuple<string,string, string>> Oracle_list_ddl_original = new ConcurrentBag<Tuple<string,string, string>>();
+        static ConcurrentBag<Tuple<string,string, string>> Oracle_list_ddl_replaced = new ConcurrentBag<Tuple<string,string, string>>();
+        static ConcurrentBag<string> view_list = new ConcurrentBag<string>();
+        static ConcurrentBag<Replace_class> Replace_list = new ConcurrentBag<Replace_class>();
+        static ConcurrentBag<FixedDDL_class> FixedDDL_list = new ConcurrentBag<FixedDDL_class>();       
+
+        static string ddl = "";
+        static string final_ddl = "";
+        static string ref_name = "";
+        static string JsonFilePath = @"D:\Janani N\Oracle Discoverer\Qlik Views\Qlik Views\config\JSON.json";
+        static string Json = File.ReadAllText(JsonFilePath);
+        static string Oracle_Conn_string = "";
+        static string Snowflake_Conn_string = "";
+        
+        public static OracleCommand Oracle_connector()
+        {
+            try
+            {
+                OracleConnection connection = new OracleConnection(Oracle_Conn_string);
+                connection.Open();
+                OracleCommand command = new OracleCommand();
+                command.Connection = connection;                
+                return command;
+            }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(null, "Exception in Oracle : " + ex.Message.ToString()));
+                return null;
+            }
+        }        
+        public static string ddl_snowflake_format(string view_ddl)
+        {
+            try
+            {
+                string final_query = view_ddl;
+                foreach (var r in Replace_list.OrderByDescending(x => x.old_value.Length))
+                { 
+                    final_query = Regex.Replace(final_query, r.old_value, r.new_value, RegexOptions.IgnoreCase);
+                    // final_query = final_query.Replace(r.old_value, r.new_value);
+                }
+                return final_query;
+            }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(null, "Exception in ddl snowflake format" + ex.Message.ToString()));
+                return null;
+            }
+        }
+        public static DbDataReader SnowflakeQueryExecuter(string vw_name ,string snowflakeSQLToExecute)
+        {
+            try
+            {
+                using (var conn = new SnowflakeDbConnection())
+                {
+                    string snowflakeConnectionString = Snowflake_Conn_string;
+                    snowflakeConnectionString = string.Format(snowflakeConnectionString, "DEV"); // warehouse should be given like this not directly
+                    conn.ConnectionString = snowflakeConnectionString;
+                    conn.Open();                    
+                    var cmd = conn.CreateCommand();
+                    cmd.CommandText = snowflakeSQLToExecute;
+                    var reader = cmd.ExecuteReader();
+                    conn.Close();
+                    return reader;
+                }
+            }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(vw_name, "Exception in snowflake connection: " + ex.Message.ToString()));
+                return null;
+            }
+        }
+        public static void Dependency(string viewname, string src_viewname,string src_schema)
+        {
+            try
+            {
+                var depd = new ConcurrentBag<Tuple<string, string, string, string, string>>((from vw in All_Dependency_list
+                            where vw.Item2 == src_viewname && vw.Item1== src_schema
+                            select vw).ToList());
+                foreach (var d in depd)
+                {
+                    ref_oracle_views.Add(new Tuple<string, string, string, string, string, string>(viewname, d.Item1, d.Item2, d.Item3, d.Item4, d.Item5));                  
+                    if (d.Item5 == "VIEW")
+                    {
+                        Dependency(viewname, d.Item4,d.Item3);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(viewname, "Exception in Dependency" + ex.Message.ToString()));
+            }
+        }
+        public static void GetSynonym()
+        {
+            try {
+
+                var list = new ConcurrentBag<string>((from d1 in ref_oracle_views
+                            where d1.Item6 == "SYNONYM"
+                            select d1.Item4 + "." + d1.Item5).ToList());
+
+                OracleCommand command = Oracle_connector();
+                command.CommandText = "SELECT S.OWNER , S.SYNONYM_NAME , T.OWNER , T.TABLE_NAME ,V.OWNER , V.VIEW_NAME , CASE WHEN T.OWNER IS NOT NULL AND T.TABLE_NAME IS NOT NULL THEN 'TABLE' 	 WHEN V.OWNER IS NOT NULL AND V.VIEW_NAME IS NOT NULL THEN 'VIEW' 	 ELSE 'NA' END AS TYPE_SYN FROM SYS.ALL_SYNONYMS S LEFT JOIN SYS.ALL_TABLES T ON T.OWNER = S.TABLE_OWNER AND T.TABLE_NAME = S.TABLE_NAME LEFT JOIN SYS.ALL_VIEWS V ON S.TABLE_OWNER = V.OWNER AND S.TABLE_NAME = V.VIEW_NAME WHERE S.owner || '.' || S.SYNONYM_NAME IN ('"+string.Join("','",list)+ "')";
+                OracleDataReader reader6 = command.ExecuteReader();
+
+                if (reader6.HasRows)
+                {
+                    while (reader6.Read())
+                    {
+                        SynonymList.Add(new Tuple<string, string, string, string, string, string, string>(reader6[0].ToString(), reader6[1].ToString(), reader6[2].ToString(), reader6[3].ToString(), reader6[4].ToString(), reader6[5].ToString(), reader6[6].ToString()));
+                    }
+                }
+                var vw_list = new ConcurrentBag<string>((from d1 in SynonymList
+                               where d1.Item7 == "VIEW"
+                               select d1.Item5 + "." + d1.Item6).ToList().Distinct());
+                
+
+                foreach (var vw in vw_list)
+                {
+                    var split_view = vw.Split('.');
+                    Dependency(vw, split_view[1], split_view[0]);
+                }
+                var all_list = new ConcurrentBag<string>((from d1 in SynonymList
+                                                         select d1.Item1 + "." + d1.Item2).ToList().Distinct());
+                var all_list2= new ConcurrentBag<string>((from d1 in ref_oracle_views
+                                                      where d1.Item6 == "SYNONYM"
+                                                      select d1.Item4 + "." + d1.Item5).ToList().Distinct());
+                var extra_obj = all_list2.Except(all_list);
+                if(extra_obj.Count()>0)
+                {
+                    GetSynonym();
+                }
+                   
+            }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(null, "Exception in GetSynonym" + ex.Message.ToString()));
+            }
+        }
+        public static void AllDependency_list()
+        {
+            try
+            {               
+                OracleCommand command = Oracle_connector();
+                 command.CommandText = "SELECT OWNER,NAME,REFERENCED_OWNER,REFERENCED_NAME,REFERENCED_TYPE FROM SYS.ALL_DEPENDENCIES where REFERENCED_TYPE IN ('TABLE','VIEW','SYNONYM')";
+                OracleDataReader reader6 = command.ExecuteReader();
+               
+                if (reader6.HasRows)
+                {
+                    while (reader6.Read())
+                    {
+                        All_Dependency_list.Add(new Tuple<string, string, string, string, string>(reader6[0].ToString(), reader6[1].ToString(), reader6[2].ToString(), reader6[3].ToString(), reader6[4].ToString()));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(null, "Exception in AllDependency_list method :" + ex.Message.ToString()));
+            }
+        }
+        public static void Oracle_ddl_original()
+        {
+            try
+            {
+                OracleCommand command = Oracle_connector();
+                 IEnumerable<string> Unique_Enum= new ConcurrentBag<string>((from r in ref_oracle_views
+                                             select r.Item2 + "." + r.Item3).Distinct().ToList());
+                
+                Unique_List = new ConcurrentBag<string>(Unique_Enum);
+                
+                IEnumerable<string> Actual_Enum = (from r in ref_oracle_views
+                                                   where r.Item6 == "VIEW"
+                                                   select r.Item4 + "." + r.Item5).Distinct().Union(Unique_List);
+                Actual_list = new ConcurrentBag<string>(Actual_Enum);
+                var viewList = "";
+                foreach (var ul in Actual_list)
+                {
+                    viewList += "'" + ul.Split(".")[1] + "',";
+                }
+                command.CommandText = "SELECT OWNER,VIEW_NAME,TEXT FROM SYS.ALL_VIEWS WHERE VIEW_NAME in(" + viewList.Remove(viewList.Length - 1) + ")";
+                command.InitialLONGFetchSize = -1;
+                OracleDataReader reader = command.ExecuteReader();
+                if (reader.HasRows)
+                {
+                    while (reader.Read())
+                    {
+                        var name = reader[0].ToString() +"."+ reader[1].ToString();
+                        var fixedDDL = (
+                                        from fd in FixedDDL_list
+                                        where fd.VIEW_NM == reader[0].ToString() + "." + reader[1].ToString()
+                                        select fd
+                                       ).FirstOrDefault();
+                        if (fixedDDL != null)
+                        {
+                            Oracle_list_ddl_original.Add(new Tuple<string, string, string>(reader[0].ToString(), reader[1].ToString(), fixedDDL.VIEW_DDL));
+                        }
+                    
+                    else {
+                        Oracle_list_ddl_original.Add(new Tuple<string, string, string>(reader[0].ToString(), reader[1].ToString(), " AS " +reader[2].ToString()));
+                    }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(null, "Exception in oracle ddl original method : " + ex.Message.ToString()));
+            }
+        }
+        public static void Oracle_ddl_replaced()
+        {
+            try
+            {
+                foreach (var org in Oracle_list_ddl_original)
+                {
+                    var flterView = new ConcurrentBag<Tuple<string, string, string, string, string>>((from refer in ref_oracle_views
+                                     where refer.Item3 == org.Item2 && refer.Item2==org.Item1
+                                     select  new Tuple<string, string, string, string, string>(refer.Item2, refer.Item3, refer.Item4, refer.Item5, refer.Item6)).ToList().Distinct().OrderByDescending(x=>x.Item5.Length));
+
+                    ddl = org.Item3;
+                    foreach (var fltr in flterView)
+                    {
+                        ref_name = fltr.Item3 + "." + fltr.Item4;
+                        var replace_value = "";
+                        if (fltr.Item5 == "SYNONYM")
+                        {
+                            var syn = (from sy in SynonymList
+                                       where sy.Item1 == fltr.Item3 && sy.Item2 == fltr.Item4
+                                       select sy).FirstOrDefault();
+                            if (syn.Item7 == "VIEW")
+                            {
+                                 replace_value = "DEV_AN.SRC_IMG_VW.CDC_ORACLE_" + syn.Item5 + "_" + syn.Item6 + "_VW";
+                            }
+                            else
+                            {
+                                replace_value = "PROD.SRC_IMG_VW.CDC_ORACLE_" + syn.Item3 + "_" + syn.Item4 + "_CT_CURRENT_VW";
+                            }
+                        }
+                        else
+                        {
+                            if (fltr.Item5 == "VIEW")
+                            {
+                                 replace_value = "DEV_AN.SRC_IMG_VW.CDC_ORACLE_" + fltr.Item3 + "_" + fltr.Item4 + "_VW";
+                            }
+                            else
+                            {
+                                replace_value = "PROD.SRC_IMG_VW.CDC_ORACLE_" + fltr.Item3 + "_" + fltr.Item4 + "_CT_CURRENT_VW";
+                            }
+                        }
+
+                        if (ddl.ToUpper().Contains(ref_name.ToUpper()))
+                        {
+                                ddl = Regex.Replace(ddl, ref_name, replace_value, RegexOptions.IgnoreCase);
+                        }
+                        else
+                        {                            
+                            ddl = Regex.Replace(ddl, fltr.Item4, replace_value, RegexOptions.IgnoreCase);                            
+                        }
+                    
+                    }
+                    Oracle_list_ddl_replaced.Add(new Tuple<string,string, string>(org.Item1,org.Item2, ddl));
+                }
+                
+            }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(null, "Exception in oracle replaced ddl method : " + ex.Message.ToString()));
+            }
+        }
+        public static void Dependency_Score()
+        {
+            try
+            {
+                var Dep_score = ref_oracle_views.GroupBy(n => n.Item1)
+                            .Select(n => new
+                            {
+                                Item1 = n.Key,
+                                Item2 = n.Count()
+                            });
+                var Dep0 = Actual_list.Where(a => !Dep_score.Any(b => a == b.Item1));
+                
+                foreach (var De in Dep0)
+                {
+                    var a =(from orc in Oracle_list_ddl_replaced where orc.Item1 == De.Split('.')[0] && orc.Item2 == De.Split('.')[1]
+                            select orc.Item3).FirstOrDefault();
+                    var fix_ddl = ddl_snowflake_format(a.Trim());
+                     final_ddl = "CREATE OR REPLACE VIEW DEV_AN.SRC_IMG_VW.CDC_ORACLE_" + De.Replace('.','_') + "_VW " + fix_ddl + ";";
+                    File.WriteAllText(Directory.GetCurrentDirectory() + "/viewddl/" + De + "_VW.sql", final_ddl);
+                    DependencyScore.Add(new Tuple<string, int,string>(De, 0,final_ddl));
+                }
+                foreach (var De in Dep_score)
+                {
+                    var a = (from orc in Oracle_list_ddl_replaced
+                             where orc.Item1 ==  De.Item1.Split('.')[0] && orc.Item2 == De.Item1.Split('.')[1]
+                             select orc.Item3).FirstOrDefault();
+                    var fix_ddl = ddl_snowflake_format(a.Trim());
+                 
+                    final_ddl = "CREATE OR REPLACE VIEW DEV_AN.SRC_IMG_VW.CDC_ORACLE_" + De.Item1.Replace('.', '_') + "_VW " + fix_ddl+ ";";
+                    File.WriteAllText(Directory.GetCurrentDirectory() + "/viewddl/" + De.Item1 + "_VW.sql", final_ddl);
+                    DependencyScore.Add(new Tuple<string, int, string>(De.Item1, De.Item2, final_ddl));
+                }
+                
+            }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(null, "Exception in main method : " + ex.Message.ToString()));
+            }
+        }
+        public static bool ClearTempFolder(string tempPath)
+        {
+            try
+            {
+                // Clear files of current instance
+                var path = Directory.GetCurrentDirectory()+"/"+ tempPath + "/";
+
+                if (!Directory.Exists(path))
+                {
+                    Directory.CreateDirectory(path);
+                }
+                else
+                {
+                    foreach (var file in Directory.GetFiles(path))
+                    {
+                        File.Delete(file);
+                    }
+                    foreach (var directory in Directory.GetDirectories(path, "*", SearchOption.TopDirectoryOnly))
+                    {
+                        Directory.Delete(directory, true);
+                    }
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        static void Main(string[] args)
+        {
+            try
+            {
+                ClearTempFolder("viewddl");
+                ClearTempFolder("Errorlist");
+                ClearTempFolder("Oracle_list_ddl_replaced");
+                Console.WriteLine("Cleared folder");
+                 var json = JsonConvert.DeserializeObject<ConfigObj>(Json);
+                view_list = json.VIEWLIST;
+                Oracle_Conn_string = json.ORACLECONNECTIONSTRING;
+                Snowflake_Conn_string = json.SNOWFLAKECONNECTIONSTRING;
+                Replace_list = json.replace_list;
+                FixedDDL_list = json.FIXED_DDL;
+                AllDependency_list();
+                Console.WriteLine("Got all depd");
+
+                foreach (var vw in view_list)
+                {
+                    var split_view = vw.Split('.');
+                    Dependency(vw, split_view[1], split_view[0]);
+                }
+
+                Console.WriteLine("Got ind depd");
+                GetSynonym();
+                Console.WriteLine("Got syn list");
+                var subDepd = (from d in ref_oracle_views
+                               where d.Item1.Contains("SACL_GL_SUBLEDGER_TRX")
+                               select d).ToList();
+                var syn = (from d in SynonymList
+                           select d).ToList();
+                File.WriteAllText(Directory.GetCurrentDirectory() + "/Errorlist/" + "syn.txt", JsonSerializer.Serialize(subDepd) + "\n\n\n" + JsonSerializer.Serialize(syn));
+
+                Oracle_ddl_original();
+                Console.WriteLine("Got orig ddl");
+
+                Oracle_ddl_replaced();
+                Console.WriteLine("Got rpcl ddl");
+
+                Dependency_Score();
+                Console.WriteLine("Got depd scr");
+
+                foreach (var dsm in DependencyScore.OrderBy(x => x.Item2))
+                {
+
+                    SnowflakeQueryExecuter(dsm.Item1, dsm.Item3);
+                }
+
+                Console.WriteLine("Executed snowflake queries");
+                }
+            catch (Exception ex)
+            {
+                Error_list.Add(new Tuple<string, string>(null, "Exception in main method : " + ex.Message.ToString()));
+            }
+            finally
+            {
+                File.WriteAllText(Directory.GetCurrentDirectory() + "/Errorlist/" + "error list.txt", JsonSerializer.Serialize(Error_list)+ Environment.NewLine);
+            }
+        }
+        public class ConfigJson
+        {
+            public ConcurrentBag<ConfigObj> value { get; set; }
+        }
+        public class ConfigObj
+        {
+            public ConcurrentBag<string> VIEWLIST { get; set; }
+            public ConcurrentBag<FixedDDL_class> FIXED_DDL { get; set; }
+            public string ORACLECONNECTIONSTRING { get; set;}
+            public string SNOWFLAKECONNECTIONSTRING { get; set; }
+            public ConcurrentBag<Replace_class> replace_list { get; set; }
+        }
+        public class Replace_class
+        {
+            public string old_value { get; set; }
+            public string new_value { get; set; }
+    }
+    public class FixedDDL_class
+    {
+        public string VIEW_NM { get; set; }
+        public string VIEW_DDL { get; set; }
+    }
+}
+}
