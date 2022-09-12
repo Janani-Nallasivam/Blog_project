@@ -17,10 +17,7 @@ namespace Qlik_Views
         static ConcurrentBag<Tuple<string, string, string, string, string, string>> ref_oracle_views = new ConcurrentBag<Tuple<string, string, string, string, string, string>>();
         static ConcurrentBag<Tuple<string, string, string, string, string>> All_Dependency_list = new ConcurrentBag<Tuple<string, string, string, string, string>>();
         static ConcurrentBag<Tuple<string, string, string, string, string, string, string>> SynonymList = new ConcurrentBag<Tuple<string, string, string, string, string, string, string>>();
-        //static IEnumerable<string> myEnum; 
         static ConcurrentBag<string> Unique_List = new ConcurrentBag<string>();
-
-        //static ConcurrentBag<T> ToConcurrentBag<T>(this IEnumerable<T> Unique_List) => new ConcurrentBag<T>(Unique_List);
         static ConcurrentBag<string> Actual_list = new ConcurrentBag<string>();
         static ConcurrentBag<Tuple<string, string>> Error_list = new ConcurrentBag<Tuple<string, string>>();
         static ConcurrentBag<Tuple<string, int,string>> DependencyScore = new ConcurrentBag<Tuple<string, int,string>>();
@@ -29,15 +26,13 @@ namespace Qlik_Views
         static ConcurrentBag<string> view_list = new ConcurrentBag<string>();
         static ConcurrentBag<Replace_class> Replace_list = new ConcurrentBag<Replace_class>();
         static ConcurrentBag<FixedDDL_class> FixedDDL_list = new ConcurrentBag<FixedDDL_class>();       
-
         static string ddl = "";
         static string final_ddl = "";
         static string ref_name = "";
-        static string JsonFilePath = @"D:\Janani N\Oracle Discoverer\Qlik Views\Qlik Views\config\JSON.json";
+        static string JsonFilePath = @"C:\Oracle\config\JSON_DATA.json";
         static string Json = File.ReadAllText(JsonFilePath);
         static string Oracle_Conn_string = "";
-        static string Snowflake_Conn_string = "";
-        
+        static string Snowflake_Conn_string = "";        
         public static OracleCommand Oracle_connector()
         {
             try
@@ -62,7 +57,6 @@ namespace Qlik_Views
                 foreach (var r in Replace_list.OrderByDescending(x => x.old_value.Length))
                 { 
                     final_query = Regex.Replace(final_query, r.old_value, r.new_value, RegexOptions.IgnoreCase);
-                    // final_query = final_query.Replace(r.old_value, r.new_value);
                 }
                 return final_query;
             }
@@ -219,10 +213,10 @@ namespace Qlik_Views
                         {
                             Oracle_list_ddl_original.Add(new Tuple<string, string, string>(reader[0].ToString(), reader[1].ToString(), fixedDDL.VIEW_DDL));
                         }
-                    
-                    else {
+                        else 
+                        {
                         Oracle_list_ddl_original.Add(new Tuple<string, string, string>(reader[0].ToString(), reader[1].ToString(), " AS " +reader[2].ToString()));
-                    }
+                        }
                     }
                 }
             }
@@ -318,12 +312,10 @@ namespace Qlik_Views
                              where orc.Item1 ==  De.Item1.Split('.')[0] && orc.Item2 == De.Item1.Split('.')[1]
                              select orc.Item3).FirstOrDefault();
                     var fix_ddl = ddl_snowflake_format(a.Trim());
-                 
                     final_ddl = "CREATE OR REPLACE VIEW DEV_AN.SRC_IMG_VW.CDC_ORACLE_" + De.Item1.Replace('.', '_') + "_VW " + fix_ddl+ ";";
                     File.WriteAllText(Directory.GetCurrentDirectory() + "/viewddl/" + De.Item1 + "_VW.sql", final_ddl);
                     DependencyScore.Add(new Tuple<string, int, string>(De.Item1, De.Item2, final_ddl));
-                }
-                
+                }      
             }
             catch (Exception ex)
             {
@@ -334,9 +326,7 @@ namespace Qlik_Views
         {
             try
             {
-                // Clear files of current instance
                 var path = Directory.GetCurrentDirectory()+"/"+ tempPath + "/";
-
                 if (!Directory.Exists(path))
                 {
                     Directory.CreateDirectory(path);
@@ -375,13 +365,11 @@ namespace Qlik_Views
                 FixedDDL_list = json.FIXED_DDL;
                 AllDependency_list();
                 Console.WriteLine("Got all depd");
-
                 foreach (var vw in view_list)
                 {
                     var split_view = vw.Split('.');
                     Dependency(vw, split_view[1], split_view[0]);
                 }
-
                 Console.WriteLine("Got ind depd");
                 GetSynonym();
                 Console.WriteLine("Got syn list");
@@ -391,22 +379,16 @@ namespace Qlik_Views
                 var syn = (from d in SynonymList
                            select d).ToList();
                 File.WriteAllText(Directory.GetCurrentDirectory() + "/Errorlist/" + "syn.txt", JsonSerializer.Serialize(subDepd) + "\n\n\n" + JsonSerializer.Serialize(syn));
-
                 Oracle_ddl_original();
                 Console.WriteLine("Got orig ddl");
-
                 Oracle_ddl_replaced();
                 Console.WriteLine("Got rpcl ddl");
-
                 Dependency_Score();
                 Console.WriteLine("Got depd scr");
-
                 foreach (var dsm in DependencyScore.OrderBy(x => x.Item2))
                 {
-
                     SnowflakeQueryExecuter(dsm.Item1, dsm.Item3);
                 }
-
                 Console.WriteLine("Executed snowflake queries");
                 }
             catch (Exception ex)
@@ -434,7 +416,7 @@ namespace Qlik_Views
         {
             public string old_value { get; set; }
             public string new_value { get; set; }
-    }
+        }
     public class FixedDDL_class
     {
         public string VIEW_NM { get; set; }
