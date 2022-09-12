@@ -112,16 +112,14 @@ namespace Qlik_Views
         }
         public static void GetSynonym()
         {
-            try {
-
+            try 
+            {
                 var list = new ConcurrentBag<string>((from d1 in ref_oracle_views
                             where d1.Item6 == "SYNONYM"
                             select d1.Item4 + "." + d1.Item5).ToList());
-
                 OracleCommand command = Oracle_connector();
                 command.CommandText = "SELECT S.OWNER , S.SYNONYM_NAME , T.OWNER , T.TABLE_NAME ,V.OWNER , V.VIEW_NAME , CASE WHEN T.OWNER IS NOT NULL AND T.TABLE_NAME IS NOT NULL THEN 'TABLE' 	 WHEN V.OWNER IS NOT NULL AND V.VIEW_NAME IS NOT NULL THEN 'VIEW' 	 ELSE 'NA' END AS TYPE_SYN FROM SYS.ALL_SYNONYMS S LEFT JOIN SYS.ALL_TABLES T ON T.OWNER = S.TABLE_OWNER AND T.TABLE_NAME = S.TABLE_NAME LEFT JOIN SYS.ALL_VIEWS V ON S.TABLE_OWNER = V.OWNER AND S.TABLE_NAME = V.VIEW_NAME WHERE S.owner || '.' || S.SYNONYM_NAME IN ('"+string.Join("','",list)+ "')";
                 OracleDataReader reader6 = command.ExecuteReader();
-
                 if (reader6.HasRows)
                 {
                     while (reader6.Read())
@@ -132,8 +130,6 @@ namespace Qlik_Views
                 var vw_list = new ConcurrentBag<string>((from d1 in SynonymList
                                where d1.Item7 == "VIEW"
                                select d1.Item5 + "." + d1.Item6).ToList().Distinct());
-                
-
                 foreach (var vw in vw_list)
                 {
                     var split_view = vw.Split('.');
@@ -148,8 +144,7 @@ namespace Qlik_Views
                 if(extra_obj.Count()>0)
                 {
                     GetSynonym();
-                }
-                   
+                }                   
             }
             catch (Exception ex)
             {
@@ -183,10 +178,8 @@ namespace Qlik_Views
             {
                 OracleCommand command = Oracle_connector();
                  IEnumerable<string> Unique_Enum= new ConcurrentBag<string>((from r in ref_oracle_views
-                                             select r.Item2 + "." + r.Item3).Distinct().ToList());
-                
-                Unique_List = new ConcurrentBag<string>(Unique_Enum);
-                
+                                             select r.Item2 + "." + r.Item3).Distinct().ToList());             
+                Unique_List = new ConcurrentBag<string>(Unique_Enum);                
                 IEnumerable<string> Actual_Enum = (from r in ref_oracle_views
                                                    where r.Item6 == "VIEW"
                                                    select r.Item4 + "." + r.Item5).Distinct().Union(Unique_List);
@@ -234,7 +227,6 @@ namespace Qlik_Views
                     var flterView = new ConcurrentBag<Tuple<string, string, string, string, string>>((from refer in ref_oracle_views
                                      where refer.Item3 == org.Item2 && refer.Item2==org.Item1
                                      select  new Tuple<string, string, string, string, string>(refer.Item2, refer.Item3, refer.Item4, refer.Item5, refer.Item6)).ToList().Distinct().OrderByDescending(x=>x.Item5.Length));
-
                     ddl = org.Item3;
                     foreach (var fltr in flterView)
                     {
@@ -265,7 +257,6 @@ namespace Qlik_Views
                                 replace_value = "PROD.SRC_IMG_VW.CDC_ORACLE_" + fltr.Item3 + "_" + fltr.Item4 + "_CT_CURRENT_VW";
                             }
                         }
-
                         if (ddl.ToUpper().Contains(ref_name.ToUpper()))
                         {
                                 ddl = Regex.Replace(ddl, ref_name, replace_value, RegexOptions.IgnoreCase);
@@ -273,12 +264,10 @@ namespace Qlik_Views
                         else
                         {                            
                             ddl = Regex.Replace(ddl, fltr.Item4, replace_value, RegexOptions.IgnoreCase);                            
-                        }
-                    
+                        }                  
                     }
                     Oracle_list_ddl_replaced.Add(new Tuple<string,string, string>(org.Item1,org.Item2, ddl));
-                }
-                
+                }               
             }
             catch (Exception ex)
             {
@@ -295,8 +284,7 @@ namespace Qlik_Views
                                 Item1 = n.Key,
                                 Item2 = n.Count()
                             });
-                var Dep0 = Actual_list.Where(a => !Dep_score.Any(b => a == b.Item1));
-                
+                var Dep0 = Actual_list.Where(a => !Dep_score.Any(b => a == b.Item1));                
                 foreach (var De in Dep0)
                 {
                     var a =(from orc in Oracle_list_ddl_replaced where orc.Item1 == De.Split('.')[0] && orc.Item2 == De.Split('.')[1]
